@@ -129,18 +129,89 @@ nonexposed_diseased_to_misclassify <- sample(which(!ten_percent_exposed_populati
                                              ten_percent_exposed_population$disease), 1800, replace = F)
 nonexposed_nondiseased_to_misclassify <- sample(which(!ten_percent_exposed_population$exposure & 
                                                         !ten_percent_exposed_population$disease), 7200, replace = F)
-differential_misclassification$exposure[exposed_diseased_to_misclassify] <- F
-differential_misclassification$exposure[exposed_nondiseased_to_misclassify] <- F
-differential_misclassification$exposure[nonexposed_nondiseased_to_misclassify] <- T
-differential_misclassification$exposure[nonexposed_diseased_to_misclassify] <- T
+differential_misclassification$observed_exposure <- differential_misclassification$exposure
+differential_misclassification$observed_exposure[exposed_diseased_to_misclassify] <- F
+differential_misclassification$observed_exposure[exposed_nondiseased_to_misclassify] <- F
+differential_misclassification$observed_exposure[nonexposed_nondiseased_to_misclassify] <- T
+differential_misclassification$observed_exposure[nonexposed_diseased_to_misclassify] <- T
 table(differential_misclassification$exposure, differential_misclassification$disease)
+table(differential_misclassification$observed_exposure, differential_misclassification$disease)
 riskratio.wald(table(differential_misclassification$exposure, differential_misclassification$disease))$measure
+riskratio.wald(table(differential_misclassification$observed_exposure, differential_misclassification$disease))$measure
 
 
 ###############################################################################
 # Validation study
 ###############################################################################
 
-differential_misclassification
+set.seed(12345)
+# First, sample a subset of 10000 as though we were doing a validation study
+validation_study <- sample_n(differential_misclassification, 10000, replace = F)
 
-length(which(ten_percent_exposed_population$exposure & ten_percent_exposed_population$disease))
+# Separate into diseased and non-diseased in order to compute stratum-specific sensitivity and specificity
+# in the validation sample
+validation_study_diseased <- validation_study[validation_study$disease,]
+validation_study_nondiseased <- validation_study[!validation_study$disease,]
+table(validation_study_diseased$exposure, validation_study_diseased$observed_exposure)
+table(validation_study_nondiseased$exposure, validation_study_nondiseased$observed_exposure)
+
+# Sensitivity = Pr(Observed Positive|True Positive)
+validation_sensitivity_diseased <- 
+  nrow(validation_study_diseased[validation_study_diseased$observed_exposure & validation_study_diseased$exposure,])/
+  nrow(validation_study_diseased[validation_study_diseased$exposure,])
+validation_sensitivity_nondiseased <- 
+  nrow(validation_study_nondiseased[validation_study_nondiseased$observed_exposure & validation_study_nondiseased$exposure,])/
+  nrow(validation_study_nondiseased[validation_study_nondiseased$exposure,])
+
+# Specificity = Pr(Observed negative|True Negative)
+validation_specificity_diseased <- 
+  nrow(validation_study_diseased[!validation_study_diseased$observed_exposure & !validation_study_diseased$exposure,])/
+  nrow(validation_study_diseased[!validation_study_diseased$exposure,])
+validation_specificity_nondiseased <- 
+  nrow(validation_study_nondiseased[!validation_study_nondiseased$observed_exposure & !validation_study_nondiseased$exposure,])/
+  nrow(validation_study_nondiseased[!validation_study_nondiseased$exposure,])
+
+# How well did we recover our misclassification rate?
+validation_sensitivity_diseased
+validation_sensitivity_nondiseased
+validation_specificity_diseased
+validation_specificity_nondiseased
+
+# Now try to back out the true RR
+observed_exposed_diseased <- 
+  nrow(differential_misclassification[differential_misclassification$disease & differential_misclassification$observed_exposure,])
+observed_exposed_nondiseased <- 
+  nrow(differential_misclassification[!differential_misclassification$disease & differential_misclassification$observed_exposure,])
+observed_nonexposed_diseased <- 
+  nrow(differential_misclassification[differential_misclassification$disease & !differential_misclassification$observed_exposure,])
+observed_nonexposed_nondiseased <- 
+  nrow(differential_misclassification[!differential_misclassification$disease & !differential_misclassification$observed_exposure,])
+
+
+# Estimated count of observed exposed/diseased who were actually non-exposed diseased
+# (disease false positive exposures) is the 1-specificity in the diseased times observed exposed diseased
+false_positive_diseased <- (1-validation_specificity_diseased)*observed_exposed_diseased
+false_positive_nondiseased <- (1-validation_specificity_nondiseased)*observed_exposed_nondiseased
+false_negative_diseased <- (1-validation_sensitivity_diseased)*observed_nonexposed_diseased
+false_negative_nondiseased <- (1-validation_sensitivity_nondiseased)*observed_nonexposed_nondiseased
+
+fixed_exposed_diseased <- observed_exposed_diseased - false_positive_diseased + false_negative_diseased
+fixed_nonexposed_diseased <- observed_nonexposed_diseased + false_positive_diseased - false_negative_diseased
+fixed_exposed_nondiseased <- observed_exposed_nondiseased - false_positive_nondiseased + false_negative_nondiseased
+fixed_nonexposed_nondiseased <- observed_nonexposed_nondiseased + false_positive_nondiseased - false_negative_nondiseased
+
+fixed2x2 <- matrix(c(fixed_nonexposed_nondiseased, fixed_exposed_nondiseased, fixed_nonexposed_diseased, fixed_exposed_diseased), nrow=2)
+dimnames(fixed2x2) <- list(c("Unexposed", "Exposed"), c("Non-Diseased", "Diseased"))
+
+# Here's our 'fixed' 2x2 table based on this validation study
+fixed2x2
+
+# What does the risk ratio look like
+riskratio.wald(round(fixed2x2))$measure
+
+# Well, fixed is closer to the truth than the not fixed version, but not perfect.
+riskratio.wald(table(differential_misclassification$observed_exposure, differential_misclassification$disease))$measure
+
+# Here's the real truth
+riskratio.wald(table(differential_misclassification$exposure, differential_misclassification$disease))$measure
+
